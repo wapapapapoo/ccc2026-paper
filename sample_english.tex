@@ -1,0 +1,513 @@
+\documentclass[english]{cccconf}
+\usepackage[comma,numbers,square,sort&compress]{natbib}
+\usepackage{epstopdf}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{subcaption}
+\usepackage{caption}
+\usepackage{url}
+\usepackage{booktabs,multirow}
+\usepackage{float}
+
+% \setlength{\intextsep}{0.7\baselineskip plus 0.2\baselineskip minus  0.2\baselineskip}
+% \setlength{\textfloatsep}{0.85\baselineskip plus  0.2\baselineskip minus  0.4\baselineskip}
+% \setlength{\floatsep}{0.7\baselineskip plus  0.2\baselineskip minus  0.2\baselineskip}
+
+% \abovedisplayskip 1.2ex plus 2bp minus 0bp
+% \belowdisplayskip \abovedisplayskip
+% \abovedisplayshortskip 0pt plus 0bp
+% \belowdisplayshortskip 1.2ex plus 2bp minus 2bp
+
+
+\begin{document}
+
+\author{Haihang Sun\aref{nkueye,nkuov,tgu}$^{,*}$,
+        Biao Li\aref{tgu}$^{,*}$,
+        Yuheng Kang\aref{hebut},
+        Bingjie Zhang\aref{ustb},
+        Yankai Yin\aref{tgu}$^{,\dagger}$,
+        Xiaoyan Yang\aref{nkueye,nkuov}$^{,\dagger}$
+}
+
+% Note: the first argument in the \affiliation command is optional.
+% It defines a label for the affiliation which can be used in the \aref
+% command. If there is only one affiliation for all authors, then the
+% optional argument in the \affiliation command should be suppressed,
+% and the \aref command should also be removed after each author in
+% \author command, in this case the affiliation will not be numbered.
+
+% 请注意：\affiliation命令的第一个参数是可选的，它定义了用于\aref命令的标签。
+% 如果所有作者只有一个单位，请不要使用\affiliation命令的可选参数，同时在上面
+% 的\author命令中的每位作者姓名后面也不能使用\aref命令，示例如下
+% \author{First Author, Second Author, Third Author}
+% \affiliation{Chinese Academy of Sciences, Beijing 100190, P.~R.~China\email{ccc@amss.ac.cn}}
+% 此时单位前不会有数字编号，作者姓名后面也没有编号
+
+\affiliation[nkueye]{Nankai University Affiliated Tianjin Eye Hospital,
+    Tianjin 300071, P.~R.~China
+    \email{yanzitjsykyy@163.com}}
+\affiliation[nkuov]{Nankai University Optometry and Vision Science Institute,
+    Tianjin 300071, P.~R.~China}
+\affiliation[tgu]{School of Software, Tiangong University,
+    Tianjin 300387, P.~R.~China
+    \email{yankaiyin@tiangong.edu.cn}}
+\affiliation[hebut]{School of Mechanical Engineering, Hebei University of Technology,
+    Tianjin 300401, P.~R.~China}
+\affiliation[ustb]{Tianjin College, University of Science and Technology Beijing,
+    Tianjin 301830, P.~R.~China}
+
+\title{Differentiable Superpixel Embedding with\\Geometry-Aware Token Representation}
+
+\maketitle
+
+\begin{abstract}
+Superpixels provide content-aligned visual primitives for token-based vision models, forming a compact representation suitable for structured perception.
+However, most existing approaches encode superpixels using hard region assignments or fixed statistical descriptors, which restrict their ability to capture intrinsic spatial structure.
+We propose a differentiable superpixel embedding framework that learns token representations directly from the soft pixel-to-superpixel affinity matrix, modeling each superpixel as a continuous spatial distribution with overlapping support.
+The embedding is decomposed into appearance, geometry, and positional components.
+A dedicated geometry encoder captures superpixel shape and scale directly from affinity distributions using a seed-centered reassembly operation followed by a lightweight convolutional network.
+The resulting tokens preserve appearance semantics while incorporating explicit geometric structure.
+Experiments on semantic segmentation tasks demonstrate consistent performance gains over existing superpixel embedding strategies.
+\end{abstract}
+
+\keywords{superpixel, semantic segmentation, deep learning}
+
+% Please remove or comment out the following line if the footnote is not necessary
+\footnotetext{
+This work was supported by the Tianjin Science and Technology Plan Project (No.24ZXYXSY00140) and the Open Project of Institute of Optometry and Vision Science in Nankai University (No.NKSGP202503, NKSGZ202408).
+  
+$^{\dagger}$ Corresponding author.
+
+$^{*}$ These authors contributed equally to this work.
+}
+
+
+\section{Introduction}
+
+Semantic segmentation is a fundamental dense prediction task that requires accurate pixel-level classification while maintaining coherent scene-level understanding.
+A central challenge is to capture global, long-range dependencies across complex scenes while preserving precise local boundary delineation.
+Existing approaches employ relational reasoning frameworks, such as Graph Neural Networks (GNNs) and Transformers, to model global interactions \cite{chen2024survey}.
+However, these models rely on structured intermediate tokens.
+Fixed $n \times n$ patch tokenization, as adopted in Vision Transformers (ViT) \cite{vit} and SegFormer \cite{segformer}, offers a simple formulation but disregards object boundaries and often mixes semantically inconsistent regions \cite{shao2024homogeneous,lu2024spenhancevit}.
+Superpixels provide a content-adaptive alternative by grouping perceptually similar and spatially proximal pixels into boundary-aware regions, forming semantically coherent primitives for downstream inference.
+
+Superpixels are generated by clustering pixels with similar appearance and spatial proximity into oversegmented regions \cite{slic}.
+These regions inherently possess irregular shapes and varying scales.
+Such geometric variability is not naturally compatible with the fixed-dimensional vector representations expected by downstream relational models.
+Transforming irregular superpixels into unified and geometry-aware token representations remains a non-trivial problem in superpixel-based segmentation pipelines, as illustrated in Fig.~\ref{fig:method-function}.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{img/normal-pipeline/ai.png}
+    \caption{A typical superpixel-based pipeline. This work focuses on embedding superpixels into vectorized token representations for downstream vision models.}
+    \label{fig:method-function}
+\end{figure}
+
+However, most existing approaches treat superpixels as discrete, non-overlapping regions and encode them using either fixed statistical descriptors (e.g., mean color, texture histograms, or spatial coordinates) \cite{spit} or features averaged during an offline preprocessing stage \cite{spgcn}.
+In dense prediction tasks, this design leads to two limitations.
+First, hard region assignments discard the overlapping spatial support intrinsic to convolutional feature representations, thereby increasing sensitivity to segmentation errors and boundary artifacts.
+Second, summarizing irregular regions with simple first-order statistics limits the ability to capture internal spatial configuration and geometric structure.
+Consequently, such embeddings remain weakly aligned with downstream objectives and cannot be jointly optimized with end-task supervision.
+
+In this paper, we reinterpret superpixel tokens as continuous spatial distributions rather than discrete regions represented by pooled appearance statistics.
+By modeling each superpixel through its soft pixel-to-superpixel affinity field, the proposed formulation retains its continuous support and internal structure, rather than reducing it to statistical descriptors.
+In addition to aggregated appearance features, we explicitly encode the intrinsic geometry implied by the affinity distribution, resulting in a differentiable and geometry-aware superpixel representation that can be jointly optimized with downstream models.
+
+To isolate the effect of the embedding design, we adopt simplified superpixel-based pipelines with either a GNN or a Transformer as the downstream model.
+Experiments on the SBD dataset demonstrate performance gains over baseline embedding strategies, confirming that carefully designed superpixel representations substantially influence the effectiveness of region-based dense prediction models.
+
+Our contributions are summarized as follows:
+
+\begin{itemize}
+\item \textbf{Continuous and differentiable superpixel tokenization: }
+We model superpixels as soft affinity-based distributions rather than hard region assignments.
+This formulation produces overlapping tokens with continuous support, mitigating boundary artifacts and preserving spatial coherence.
+
+\item \textbf{Affinity-driven geometric encoding: }
+We introduce a geometry encoder with a seed-centered affinity reassembly operation and a lightweight CNN.
+The encoder captures intrinsic superpixel shape and scale directly from the affinity field, embedding geometric structure into compact feature representations.
+
+\item \textbf{Geometry-aware token fusion mechanism: }
+We develop a gated fusion module that integrates appearance, geometric, and positional features within a unified superpixel encoder.
+The FiLM-style gating mechanism modulates appearance representations using structural cues, enabling task-adaptive and geometry-aware superpixel tokens.
+
+\end{itemize}
+
+\section{Related Work}
+
+\subsection{Token-based Models for Vision Tasks}
+
+Vision Transformers (ViT) \cite{vit} reformulate images as sequences of patch tokens and employ standard Transformer encoders for visual recognition.
+They demonstrate that global self-attention over patch tokens can achieve performance comparable to or exceeding that of convolutional neural networks.
+Subsequent studies, such as Swin Transformer \cite{swin}, improve computational efficiency and scalability through hierarchical token representations and adaptive token pruning strategies.
+
+Beyond token construction, various relational reasoning mechanisms have been proposed to model interactions among visual tokens.
+Vision GNN (ViG) \cite{vig} demonstrates that graph-based message passing over visual tokens provides an effective alternative to self-attention.
+SegFormer \cite{segformer} further shows that lightweight Transformer-based inference combined with multi-scale feature aggregation achieves competitive performance on dense prediction tasks.
+
+\subsection{Soft-Assigned Superpixel Segmentation}
+
+Many superpixel-based pipelines (e.g. \cite{wei2025dual}) rely on offline superpixel generation followed by fixed node embeddings, primarily due to the non-differentiability of the classical Simple Linear Iterative Clustering (SLIC) \cite{slic} algorithm.
+This limitation is addressed by recent differentiable superpixel segmentation methods based on soft assignments.
+Superpixel Sampling Network (SSN) \cite{ssn} reformulates SLIC as a differentiable clustering procedure, enabling end-to-end gradient propagation.
+Superpixel Fully Convolutional Network (SpixelFCN) \cite{sfcn} predicts superpixel assignments directly in the forward pass.
+These methods produce a soft assignment tensor $Q \in \mathbb{R}^{k \times H \times W}$, where $Q(:, h, w)$ represents the affinities between the pixel at location $(h, w)$ and its $k$ neighboring superpixel seeds.
+In practice, $k$ typically corresponds to the $3 \times 3$ neighborhood of superpixel seeds around each pixel on a regular $16 \times 16$ seed grid, yielding at most nine affinities per pixel.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=0.9\linewidth]{img/mfg/mfg.pdf}
+    \caption{
+      Overview of the proposed superpixel embedding method. %Each superpixel is characterized by five factors, which are encoded in $F$, $Q$, and absolute position. Based on these representations, three branches (appearance, geometry, position) capture complementary cues respectively and are fused via a gated fusion module to produce the final embedding.
+    }
+    \label{fig:mainfig}
+\end{figure*}
+
+\subsection{Superpixel Embedding Methods}
+
+A central design choice in superpixel-based pipelines is the embedding strategy used to convert superpixels into feature vectors for relational reasoning.
+Early approaches, such as SPGCN \cite{spgcn}, compute superpixel embeddings by averaging pixel-level features within each region as a preprocessing step.
+The node features remain fixed throughout training.
+
+SPiT \cite{spit} is among the first works to systematically analyze the information that a superpixel embedding should encode.
+It represents each superpixel using five factors: color, texture, shape, scale, and position.
+However, SPiT relies on hand-crafted feature extractors, while effective, this design does not yield task-adaptive representations.
+
+% A representative subsequent approach, SPFormer \cite{spformer}, treats superpixels not as input tokens but as intermediate representations embedded within the network architecture.
+% It jointly optimizes pixel features, superpixel features, and pixel-to-superpixel soft affinities through cross-attentions, thereby coupling superpixel formation with the inference architecture.
+% In its design, superpixel features are updated via cross-attention from pixel features in each superpixel seed's window, while pixel features are weight-aggregated from superpixel features.
+% Such an interaction-driven formulation differs fundamentally from our focus on standalone superpixel token embedding.
+
+\section{Method}
+
+\subsection{Overview}
+
+We focus on the design of superpixel token representations for dense prediction.
+Building upon the factorization analysis introduced in SPiT~\cite{spit}, we model the five superpixel factors using fully differentiable modules, enabling end-to-end optimization of superpixel tokens with downstream models.
+
+Given an input image $X \in \mathbb{R}^{C \times H \times W}$, a soft superpixel segmentation method (e.g., differentiable SLIC proposed in SSN~\cite{ssn}, SpixelFCN~\cite{sfcn}) predicts a pixel-to-superpixel affinity tensor $Q \in \mathbb{R}^{9 \times H \times W}$, where each pixel is softly assigned to its $3 \times 3$ neighboring seeds on a regular grid with spacing $S$. The total number of superpixels is $N = \frac{H}{S} \cdot \frac{W}{S}$.
+Based on $Q$ and pixel-level features, we construct a token embedding $\mathbf{z}_s$ for each superpixel seed $s$.
+
+As shown in Fig.~\ref{fig:mainfig}, we divide the five factors of a superpixel into three branches: \textbf{appearance}, \textbf{geometry}, and \textbf{position}, and embed them using different strategies.
+
+\textbf{The appearance branch encodes color and texture.}
+Color is a per-pixel attribute, while texture corresponds to local high-frequency patterns that can be captured by a small number of convolutional layers.
+We therefore use a lightweight CNN to extract pixel features $F$ and obtain superpixel appearance features via soft weighted pooling weighted by the affinity $Q$.
+
+\textbf{The geometry branch encodes superpixel shape and scale.}
+In our embedding formulation, these geometric properties do not depend on pixel-level appearance features and do not explicitly encode absolute spatial position; instead, they are determined by the spatial support of the superpixel itself.
+We apply a seed-centered affinity reassembly operation that rearranges the affinity matrix $Q$ in each seed-centered neighborhood area and produces a local affinity tensor $Q' \in \mathbb{R}^{N \times 3S \times 3S}$.
+Each slice $Q'(s,:,:)$ represents the continuous spatial support of superpixel $s$ in a bounded local region.
+This representation is then embedded with a lightweight convolutional geometry encoder.
+
+\textbf{The positional branch encodes superpixel location.}
+We compute a soft centroid for each superpixel by aggregating normalized pixel coordinates weighted by $Q$, and embed it using a small MLP.
+As discussed in \cite{segformer}, absolute positional information improves spatial awareness but introduces a trade-off with translation invariance and generalization.
+We therefore treat position as an auxiliary signal and avoid directly entangling it with appearance features.
+
+These three branches are finally combined through a superpixel encoder.
+The geometry and positional embeddings modulate the appearance features via a FiLM mechanism, producing the final superpixel token feature vector $\mathbf{z}_s$.
+This design preserves appearance semantics while incorporating geometric and spatial features without overriding them.
+
+\subsection{Geometric Branch with a Convolutional Encoder}
+
+The geometric branch encodes superpixel-intrinsic structure while remaining invariant to appearance and absolute image location.
+To achieve this, we first transform the affinity responses into a canonical, seed-aligned representation, and then embed it using a convolutional geometry encoder.
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=1\linewidth]{img/saro/saro-new-man.png}
+    \caption{Seed-centered affinity reassembly operation.}
+    \label{fig:saro}
+\end{figure}
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=0.7\linewidth]{img/qs-example/2010_002279_spix.png}
+    \caption{Examples of the seed-centered affinity map $Q'_s$.}
+    \label{fig:sla-exam}
+\end{figure}
+
+As illustrated in Fig.~\ref{fig:saro}, we introduce a seed-centered affinity reassembly operation that reorganizes the affinity responses of each superpixel into a local coordinate frame centered at each seed.
+For a given seed, affinity contributions from its neighboring seeds are spatially shifted and reassembled such that the seed of interest occupies the center of the representation.
+This results in a spatially continuous, fixed-size 2D affinity map that describes the spatial support of the superpixel relative to its seed.
+The procedure is summarized in \textbf{Algorithm~\ref{alg:q2qprime}}.
+
+\begin{algorithm}[!t]
+\caption{Seed-centered affinity reassembly}
+\label{alg:q2qprime}
+\begin{algorithmic}[1]
+
+\REQUIRE 
+    affinity tensor $Q \in \mathbb{R}^{9 \times H \times W}$; seed spacing $S$
+\ENSURE 
+    seed-centered affinity maps $Q' = \{Q'_s\}_{s=1}^{N}$
+
+\STATE $W_s \gets \frac{W}{S},~H_s \gets \frac{H}{S},~N \gets W_s \cdot H_s$
+
+\STATE $Q^{\mathrm{pad}} \gets \mathrm{Pad}(Q,\; (S,S,S,S))$
+
+\STATE $\mathcal{O} \gets \big[(1, 1), (1, 0), \dots, (-1, -1)\big]$
+
+\FOR{$j = 1$ to $9$}
+    \STATE $(\Delta_x,\Delta_y) \gets \mathcal{O}(j)$
+    \STATE $x_0 \gets S(1+\Delta_x),~y_0 \gets S(1+\Delta_y)$
+    \STATE $\widetilde{Q}(j,:,:) \gets Q^{\mathrm{pad}}(j,\; y_0:y_0+H,\; x_0:x_0+W)$
+\ENDFOR
+
+\FOR{$s_y = 0$ to $H_s-1$}
+    \FOR{$s_x = 0$ to $W_s-1$}
+        \STATE $s \gets s_y \cdot W_s + s_x + 1$
+        \STATE Initialize $Q'_s \gets \mathbf{0}_{3S \times 3S}$
+        \STATE $\widetilde{Q}_s \gets \widetilde{Q}(:,\; s_y \cdot S:(s_y+1) \cdot S,\; s_x \cdot S:(s_x+1) \cdot S)$
+        \FOR{$j = 1$ to $9$}
+            \STATE $(\Delta_x,\Delta_y) \gets \mathcal{O}(j)$
+            \STATE $R_y \gets (\Delta_y+1) \cdot S:(\Delta_y+2) \cdot S$ 
+            \STATE $R_x \gets (\Delta_x+1) \cdot S:(\Delta_x+2) \cdot S$
+            \STATE $Q'_s(R_y, R_x) \gets \widetilde{Q}_s(j,:,:)$
+
+        \ENDFOR
+    \ENDFOR
+\ENDFOR
+
+\RETURN $Q'$
+
+\end{algorithmic}
+\end{algorithm}
+
+As shown in Fig.~\ref{fig:sla-exam}, after the reassembly operation, each superpixel is associated with a seed-centered affinity map $Q'_s = Q'(s,:,:) \in \mathbb{R}^{3S \times 3S}$, which provides a geometry-only description independent of global image coordinates.
+Each seed-centered affinity map $Q'_s$ is treated as a discrete, non-negative scalar field defined on a seed-aligned local domain $\Omega_{\mathrm{loc}}$ of size $3S\times 3S$.
+\begin{equation}
+Q'_s : \Omega_{\mathrm{loc}} \subset \mathbb{R}^2 \rightarrow \mathbb{R}_{\ge 0}
+\end{equation}
+represents a soft superpixel occupancy distribution defined on a local, seed-aligned coordinate frame.
+We embed this field using the geometry encoder.
+Each $Q'_s$ is processed independently as a single-channel input by a stack of strided convolutional layers with normalization and nonlinearity, denoted by $\phi(\cdot)$, followed by global average pooling (GAP):
+\begin{equation}
+\mathbf{h}_s = \mathrm{GAP}\!\left(\phi(Q'_s)\right).
+\end{equation}
+Here $\mathbf{h}_s \in \mathbb{R}^d$, where $d$ is the output channel dimension of the geometry encoder.
+
+This CNN-GAP structure performs spatial aggregation over the occupancy field.
+Equivalently, the learned convolutional filters implicitly parameterize a set of geometric basis functions $\{\varphi_k\}_{k=1}^d$ over $\Omega_{\mathrm{loc}}$, and each channel of $\mathbf{h}_s$ approximates the inner product
+\begin{equation}
+\mathbf{h}_{s,k} \;\approx\; \langle Q'_s, \varphi_k \rangle
+\;=\;
+\sum_{p \in \Omega_{\mathrm{loc}}} Q'_s(p)\,\varphi_k(p).
+\end{equation}
+As a result, $\mathbf{h}_s$ represents the superpixel geometry as coefficients in a learned low-dimensional shape space, where different channels respond to characteristic spatial patterns of the soft occupancy field, such as elongation, anisotropy, or boundary bias.
+
+To explicitly preserve scale information that may be attenuated by convolution and pooling, we compute the total mass of the occupancy field,
+\begin{equation}
+a_s = \sum_{p \in \Omega_{\mathrm{loc}}} Q'_s(p),
+\end{equation}
+which corresponds to its zeroth-order moment and reflects the effective size of the superpixel.
+This scalar is projected into the embedding space by a learnable mapping $\psi(\cdot)$,
+\begin{equation}
+\mathbf{e}_s = \psi(a_s),
+\end{equation}
+and combined additively with the shape coefficients:
+\begin{equation}
+\mathbf{z}_s^{\mathrm{geo}} = \mathbf{h}_s + \mathbf{e}_s.
+\end{equation}
+
+The resulting geometry embedding $\mathbf{z}_s^{\mathrm{geo}}$ therefore encodes both superpixel shape and scale, is computed solely from affinity geometry, and is independent of appearance features and global image coordinates.
+It serves as a compact geometric descriptor for subsequent feature fusion.
+
+\subsection{Superpixel Encoder with Gated Fusion}
+
+With appearance, geometry, and positional features extracted for each superpixel, we now describe how these factors are fused into a unified token representation.
+Let $\Omega_{\mathrm{img}}$ denote the global image domain (all pixels). We define $Q_s(p)$ as the affinity from pixel location $p$ to seed $s$, obtained from the 9-channel tensor $Q$ via the neighbor ordering $\mathcal{O}$ in Algorithm~\ref{alg:q2qprime} (and $Q_s(p)=0$ if $s$ is not among the 9 neighbors). 
+Given pixel features $F \in \mathbb{R}^{C \times H \times W}$ and the soft assignment tensor $Q$, we first define the mass of superpixel $s$ as
+\begin{equation}
+m_s = \sum_{p \in \Omega_{\mathrm{img}}} Q_s(p).
+\end{equation}
+The appearance embedding is then obtained by soft average pooling,
+\begin{equation}
+\mathbf{z}_s^{\mathrm{app}}
+=
+\frac{1}{m_s}
+\sum_{p \in \Omega_{\mathrm{img}}} Q_s(p)\,F(p).
+\end{equation}
+
+The spatial location of each superpixel is encoded independently of appearance by computing a soft centroid over normalized coordinates $P(p) = (\frac{p_x}{W}, \frac{p_y}{H})$, which is embedded using a lightweight MLP $g$,
+\begin{equation}
+\mathbf{z}_s^{\mathrm{pos}} = g(
+    \frac{1}{m_s}
+    \sum_{p \in \Omega_{\mathrm{img}}} Q_s(p)\,P(p)
+).
+\end{equation}
+
+\begin{figure}[!tb]
+    \centering
+    \includegraphics[width=0.6\linewidth]{img/fusion/fusion.pdf}
+    \caption{The FiLM-Style fusion module.}
+    \label{fig:fusion}
+\end{figure}
+
+The final superpixel token is constructed via gated fusion demonstrated in Fig.\ref{fig:fusion}.
+Geometry and positional embeds are concated to generate channel-wise modulation parameters,
+\begin{equation}
+(\boldsymbol{\gamma}_s, \boldsymbol{\beta}_s)
+=
+\mathrm{MLP}\!\left([\mathbf{z}_s^{\mathrm{geo}}, \mathbf{z}_s^{\mathrm{pos}}]\right),
+\end{equation}
+allowing the model to adaptively regulate the influence of absolute positional information for each superpixel.
+These parameters modulate the appearance embedding,
+\begin{equation}
+\mathbf{z}_s
+=
+\mathrm{MLP}\!\left(\mathbf{z}_s^{\mathrm{app}} \odot (1 + \boldsymbol{\gamma}_s) + \boldsymbol{\beta}_s\right) .
+\end{equation}
+
+This FiLM-style gating allows geometry and position to influence appearance features while preserving their semantic content, resulting in geometry-aware superpixel tokens.
+
+
+\begin{table*}[!htb]
+\centering
+\caption{Segmentation results on the SBD dataset under our evaluation setting.}
+\label{tab:main_result}
+\begin{tabular}{lcccccccccc}
+\toprule
+ & \multicolumn{5}{c}{TAGCN} & \multicolumn{5}{c}{Transformer} \\
+\cmidrule(lr){2-6} \cmidrule(lr){7-11}
+Method 
+& train & bus & car & mIoU & param
+& train & bus & car & mIoU & param \\
+\midrule
+Ours                                   & \textbf{84.36\%} & \textbf{79.41\%} & 74.06\% & \textbf{79.28\%} & 6,886K & \textbf{88.04\%} & \textbf{78.35\%} & \textbf{76.81\%} & \textbf{81.06\%} & 7,871K \\
+Ours (hard assignment)                 & 83.39\% & 73.44\% & \textbf{74.32\%} & 77.05\% & 6,886K & 84.14\% & 76.20\% & 74.60\% & 78.31\% & 7,871K \\
+SPiT-style embedding                   & 78.85\% & 75.09\% & 69.30\% & 74.41\% & 6,715K & -- & -- & -- & -- & -- \\
+Ours w/o geometry \& position          & 80.46\% & 76.29\% & 69.29\% & 75.35\% & 6,871K & -- & -- & -- & -- & -- \\
+Ours w/o position                      & 81.56\% & 76.27\% & 73.46\% & 77.09\% & 6,886K$^{a}$ & -- & -- & -- & -- & -- \\
+\bottomrule
+\addlinespace[0.3em]
+\multicolumn{11}{l}{\footnotesize $^{a}$ Although rounded to the same value as Rows 1-2, this variant contains 320 fewer parameters (0.32K).} \\
+\end{tabular}
+\end{table*}
+
+\section{Experiment}
+
+\subsection{Implementation Detail and Experiment Setup}
+
+To evaluate the proposed superpixel embedding method, we adopt two lightweight pipelines, each consisting of a frozen SpixelFCN as the upstream superpixel generator, a lightweight CNN for pixel feature extraction, and different downstream models: a four-layer topology-adaptive graph convolution network (TAGCN) \cite{tagcn}, and a ViT-style model composed of four Transformer encoder layers with four attention heads.
+The total number of parameters across all evaluated models ranges from 6.7M to 7.9M, while the proposed embedder contains 172K parameters.
+At a resolution of $384\times512$, the computational cost of our embedder is 1.79 GFLOPs per forward pass, while Its asymptotic time complexity is $\mathcal{O}(BHWC_1+BNC_2)$, where $C_1$ and $C_2$ are constants, maintaining a lightweight computational footprint.
+
+% param size: GeoEncoder=14272, PosEmbed=320, Fusion=157184; sfcn=2287956, enc=3271936, transformer=3159552, decoder=1268054, dslic=14714688
+
+All experiments are conducted on the Semantic Boundaries Dataset (SBD)~\cite{sbd}, an augmented dataset based on PASCAL VOC 2011 that provides pixel-level annotations for additional VOC 2011 images without segmentation labels.
+The dataset contains 11,318 images, split into 8,498 training and 2,820 validation samples.
+Compared to the original VOC annotations, SBD labels are relatively coarse.
+All images are randomly cropped to a size of $384\times512$.
+We report mean Intersection-over-Union (mIoU) as the evaluation metric.
+
+\subsection{Results and Ablation Study}
+
+Table~\ref{tab:main_result} reports segmentation results obtained using different superpixel embedding strategies with TAGCN and Transformer downstream models.
+The proposed geometry-aware embedding with soft assignment yields the best performance in both cases, achieving 79.28\% mIoU with TAGCN and 81.06\% with the Transformer.
+Comparing Row 1 and Row 3 shows that our method obviously outperforms the SPiT-style embedding under GNN setting (79.28\% vs. 74.41\%) with a comparable number of parameters.
+This comparison indicates that learnable embeddings is more effective than hand-craft statistical descriptors for representing superpixels.
+
+Replacing the soft affinity with hard labels obtained by $\arg\max Q$ leads to consistent performance degradation.
+Under TAGCN, mIoU drops from 79.28\% to 77.05\%; under the Transformer, it drops from 81.06\% to 78.31\%.
+The decline across both architectures demonstrates that soft, overlapping assignments are superior to hard partitioning.
+Modeling superpixels as continuous spatial distributions provides a more informative representation than treating them as fixed regions.
+
+The ablation study on the geometry and position branches further clarifies their roles.
+Removing both branches reduces mIoU to 75.35\%, showing that appearance-only aggregation is insufficient.
+When only the positional branch is removed, performance improves to 77.09\%, indicating that positional encoding contributes complementary information but is not the primary factor.
+The larger drop associated with removing geometry confirms that encoding intrinsic shape and scale is critical.
+Overall, these results show that explicitly embedding superpixel geometric and spatial structure leads to measurable gains.
+Despite the lightweight experimental setup, the consistent improvements support the effectiveness of the proposed geometry-aware superpixel embedding.
+
+\subsection{Evaluation of Embedding Quality}
+
+\captionsetup[subfigure]{skip=0pt}
+\begin{figure}
+    \centering
+    \subfloat[]{
+        \includegraphics[width=0.472\linewidth]{img/t-SNE/tsne_clazz.jpg}
+    }
+    \hfill
+    \subfloat[]{
+        \includegraphics[width=0.472\linewidth]{img/t-SNE/tsne_anisotropy.jpg}
+    }
+
+    \vspace{0.5em}
+    \subfloat[]{
+        \includegraphics[width=0.472\linewidth]{img/t-SNE/tsne_compactness.jpg}
+    }
+    \hfill
+    \subfloat[]{
+        \includegraphics[width=0.472\linewidth]{img/t-SNE/tsne_size.jpg}
+    }
+
+    \vspace{0.5em}
+    \subfloat[]{
+        \includegraphics[width=0.472\linewidth]{img/t-SNE/tsne_position.jpg}
+    }
+    \hfill
+    \subfloat[]{
+        \includegraphics[width=0.472\linewidth]{img/t-SNE/tsne_position_x.jpg}
+    }
+
+    \vspace{0.5em}
+    \subfloat[]{
+        \includegraphics[width=0.472\linewidth]{img/t-SNE_class.png}
+    }
+
+    \caption{t-SNE visualization of superpixel embeddings on SBD validation set. Subfigures are colored by superpixels' (a) majority class; (b) geometric anisotropy; (c) geometric compactness; (d) size (i.e. $m_s$); (e) vertical position; (f) horizontal position; (g) majority class (train/bus/car subset).}
+    \label{fig:tsne}
+\end{figure}
+
+
+Fig.~\ref{fig:tsne} presents t-SNE visualizations of the same randomly sampled superpixels, colored according to different attributes.
+When colored by class, the embeddings exhibit a clear separation between background and different foreground categories, indicating that the learned representation captures meaningful semantic information.
+When colored by anisotropy, compactness, and size, the distributions reveal coherent structures aligned with these geometric properties, suggesting that the embedding effectively encodes intrinsic shape and scale characteristics of superpixels.
+As geometric features are fused into the final representation through a learnable modulation mechanism, this observation confirms that downstream models benefit from explicit shape and scale information.
+
+Coloring by absolute spatial coordinates provides additional insight.
+Superpixels are well separated along the y axis, while the x axis appears more mixed.
+This pattern is consistent with typical scene layouts and further supports the validity and semantic consistency of the proposed embedding.
+
+\begin{table}[!t]
+\centering
+\caption{KNN-based superpixel embedding quality evaluation results, including superpixel classification accuracy and semantic segmentation mIoU.}
+\label{tab:knn_embed_eval}
+\begin{tabular}{lcc}
+\toprule
+Embedding Method & Accuracy & mIoU \\
+\midrule
+Ours & \textbf{83.41\%} & \textbf{46.21\%} \\
+SPiT-like embedding & 68.95\% & 3.49\% \\
+Random retrieval   & 67.13\% & 3.42\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We further conduct a KNN-based auxiliary experiment to directly assess whether the learned superpixel embeddings encode task-relevant semantic information.
+A model trained on SBD is applied to the training split to extract superpixel embeddings $\mathbf{z}_s$.
+For each superpixel, a soft semantic label distribution $\mathbf{y}_s$ is obtained via weighted average pooling of pixel-level one-hot ground truth, forming key-value pairs $\langle \mathbf{z}_s, \mathbf{y}_s \rangle$ stored in memory.
+During validation, superpixel embeds are used as queries to retrieve their $k$ nearest neighbors from this set.
+The neighbors vote to determine the semantic category of each query superpixel, and aggregating all superpixel predictions produces the final segmentation map.
+
+Experiment results are reported in Table~\ref{tab:knn_embed_eval}.
+The SPiT-like embedding exhibits performance close to the noise baseline under this evaluation protocol, suggesting that it captures lower-level or less semantic information.
+In contrast, the proposed embedding yields substantially higher accuracy and mIoU, indicating that it encodes discriminative, task-aligned semantic representations that can be directly exploited through non-parametric retrieval.
+
+\section*{CONCLUSION}
+
+In this paper, we introduced a geometry-aware superpixel embedding framework that models each superpixel as a continuous spatial distribution and explicitly encodes its intrinsic shape and scale based on pixel-to-superpixel affinities.
+Experiments on semantic segmentation benchmarks demonstrate that the proposed embedding yields more discriminative superpixel representations and consistently improves the performance of superpixel-based segmentation pipelines.
+The results further indicate that effective superpixel embeddings should exploit the affinity distributions produced by differentiable superpixel segmentation, rather than relying on hand-crafted geometric descriptors or purely appearance-based aggregation.
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}
